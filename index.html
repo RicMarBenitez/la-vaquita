@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Dividí los gastos del grupo sin hacer cuentas.">
+<meta name="theme-color" content="#1E6A46">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>html{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
+<title>La Vaquita</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one mobile-first column (max 540px), app-style screens: lista de vaquitas → detalle con pestañas */
+:root{
+  --bg:#F2F5F0; --surface:#FFFFFF; --ink:#16231B; --muted:#5B6A61; --line:#DAE2DA;
+  --accent:#1E6A46; --accent-ink:#FFFFFF; --accent-soft:#E0EEE5;
+  --pos:#1D7A49; --neg:#B4442E; --neg-soft:#F6E3DD;
+  --font-display:"Bricolage Grotesque", "Trebuchet MS", system-ui, sans-serif;
+  --font-body:"Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --r:14px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1511; --surface:#16201A; --ink:#E5EEE8; --muted:#97A79D; --line:#25322A;
+  --accent:#5CBF8B; --accent-ink:#0B1A11; --accent-soft:#1A3225;
+  --pos:#6ACB93; --neg:#EE8A72; --neg-soft:#3A221C; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1511; --surface:#16201A; --ink:#E5EEE8; --muted:#97A79D; --line:#25322A;
+  --accent:#5CBF8B; --accent-ink:#0B1A11; --accent-soft:#1A3225;
+  --pos:#6ACB93; --neg:#EE8A72; --neg-soft:#3A221C; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.45;padding-inline:16px;padding-block:20px 48px}
+.app{max-width:540px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+h1,h2,h3{font-family:var(--font-display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.num{font-variant-numeric:tabular-nums}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Brand */
+.brand{display:flex;align-items:center;gap:12px}
+.brand svg{flex:none}
+.brand h1{font-size:30px;font-weight:800}
+.brand p{margin:0;color:var(--muted);font-size:14px}
+
+/* Generic blocks */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px}
+.label{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.muted{color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1 1 160px;min-width:0}
+input[type=text],input[inputmode],select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+input::placeholder{color:var(--muted)}
+.btn{border:0;border-radius:999px;padding:11px 18px;font-weight:600;background:var(--accent);color:var(--accent-ink);white-space:nowrap}
+.btn:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.btn.small{padding:7px 12px;font-size:14px}
+.link{background:none;border:0;padding:4px 0;color:var(--accent);font-weight:600}
+.del{background:none;border:0;color:var(--muted);font-size:13px;padding:6px 8px;border-radius:8px}
+.del:hover{color:var(--neg)}
+.del.armed{background:var(--neg-soft);color:var(--neg);font-weight:600}
+.msg{font-size:14px;color:var(--neg);margin:0}
+.msg:empty{display:none}
+.badge{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;background:var(--accent-soft);color:var(--accent);padding:2px 8px;border-radius:999px;vertical-align:middle}
+
+/* Home list */
+.list{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.item{display:flex;align-items:center;gap:12px;padding:14px 16px;border:0;border-top:1px solid var(--line);background:none;text-align:left;width:100%}
+.item:first-child{border-top:0}
+.item:hover{background:var(--accent-soft)}
+.item .t{font-weight:600}
+.item .s{font-size:14px;color:var(--muted)}
+.item .amt{margin-left:auto;font-weight:700}
+.empty{padding:22px 16px;text-align:center;color:var(--muted)}
+
+/* Group header */
+.ghead{display:flex;flex-direction:column;gap:6px}
+.ghead h2{font-size:26px;font-weight:800}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.stat{background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.stat b{font-size:20px;font-family:var(--font-display);font-weight:800;overflow-wrap:anywhere}
+
+.tabs{display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px}
+.tab{flex:1;border:0;background:none;border-radius:999px;padding:9px 6px;font-weight:600;color:var(--muted);font-size:15px}
+.tab[aria-selected=true]{background:var(--accent);color:var(--accent-ink)}
+
+/* People chips */
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 6px 6px 12px;border-radius:999px;background:var(--accent-soft);color:var(--ink);font-weight:500}
+.chip button{border:0;background:none;color:var(--muted);width:24px;height:24px;border-radius:50%;line-height:1}
+.chip button:hover{color:var(--neg)}
+.pick{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--bg);font-size:15px;user-select:none}
+.pick input{accent-color:var(--accent);margin:0}
+.pick:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+
+/* Expenses */
+.exp{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+.exp:first-child{border-top:0;padding-top:0}
+.exp .d{flex:1;min-width:0}
+.exp .d .t{font-weight:600;overflow-wrap:anywhere}
+.exp .d .s{font-size:14px;color:var(--muted)}
+.exp .r{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.exp .r b{font-weight:700}
+
+/* Balances */
+.bal{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:12px 0;border-top:1px solid var(--line)}
+.bal:first-child{border-top:0;padding-top:0}
+.bal .n{font-weight:600;overflow-wrap:anywhere}
+.bal .v{font-weight:700;text-align:right}
+.bal .v.pos{color:var(--pos)} .bal .v.neg{color:var(--neg)}
+.bal .s{font-size:13px;color:var(--muted);grid-column:1 / -1}
+.bar{grid-column:1 / -1;height:6px;border-radius:3px;background:var(--bg);position:relative;overflow:hidden}
+.bar i{position:absolute;top:0;bottom:0;border-radius:3px}
+.bar .mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--line)}
+
+.tr{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:12px;background:var(--bg);flex-wrap:wrap}
+.tr .who{flex:1 1 180px;min-width:0}
+.tr .who b{font-weight:700}
+.tr .amt{font-family:var(--font-display);font-weight:800;font-size:19px}
+.ok{padding:14px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-weight:600;text-align:center}
+
+.share textarea{width:100%;min-height:150px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;resize:vertical}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:600;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+.foot{font-size:13px;color:var(--muted);text-align:center}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="brand">
+    <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+      <circle cx="22" cy="22" r="22" fill="var(--accent)"/>
+      <path d="M12 15c-3-1-5-4-4-6 3 0 5 2 6 4M32 15c3-1 5-4 4-6-3 0-5 2-6 4" fill="var(--accent-soft)"/>
+      <ellipse cx="22" cy="22" rx="10" ry="9" fill="var(--accent-soft)"/>
+      <ellipse cx="22" cy="28" rx="7" ry="5" fill="var(--surface)"/>
+      <circle cx="18" cy="20" r="1.6" fill="var(--ink)"/><circle cx="26" cy="20" r="1.6" fill="var(--ink)"/>
+      <circle cx="19.5" cy="28" r="1.1" fill="var(--ink)"/><circle cx="24.5" cy="28" r="1.1" fill="var(--ink)"/>
+    </svg>
+    <div>
+      <h1>La Vaquita</h1>
+      <p>Dividí los gastos del grupo sin hacer cuentas.</p>
+    </div>
+  </header>
+  <main id="view">
+    <div class="card" id="fallback">
+      <h3 style="font-size:18px">Cargando la app…</h3>
+      <p style="margin:0">Si esta pantalla no cambia en unos segundos, probá abrir el link en Chrome o Safari.</p>
+      <p style="margin:0"><b>Qué hacer:</b> tocá los tres puntitos (⋮) arriba a la derecha y elegí <b>"Abrir en Chrome"</b> (o Safari en iPhone). También podés copiar el link y pegarlo en el navegador.</p>
+      <p class="msg" id="err"></p>
+    </div>
+  </main>
+  <p class="foot">Los datos se guardan en este dispositivo.</p>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+window.addEventListener("error", function(ev){
+  var el = document.getElementById("err");
+  if (el) el.textContent = "Detalle del error: " + (ev.message || "desconocido");
+});
+</script>
+<script>
+(function(){
+  const KEY = "la-vaquita-v1";
+  const $view = document.getElementById("view");
+  const ui = { tab: "gastos", armed: null, armTimer: null, msg: "", shareText: null };
+
+  // ---------- Estado ----------
+  function uid(){ return Math.random().toString(36).slice(2,9); }
+  function sample(){
+    const p = ["Sofi","Martín","Lucía","Tomás"].map(n => ({id:uid(), name:n}));
+    const all = p.map(x => x.id);
+    return { id:uid(), name:"Asado en lo de Sofi", example:true, people:p, expenses:[
+      {id:uid(), desc:"Carne y achuras", amount:3600000, payer:p[1].id, split:all},
+      {id:uid(), desc:"Bebidas", amount:1450000, payer:p[2].id, split:all},
+      {id:uid(), desc:"Helado", amount:800000, payer:p[0].id, split:[p[0].id,p[2].id,p[3].id]}
+    ]};
+  }
+  let state;
+  try { state = JSON.parse(localStorage.getItem(KEY)); } catch(e) { state = null; }
+  if (!state || !Array.isArray(state.groups)) state = { groups:[sample()], current:null };
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {} }
+  const group = () => state.groups.find(g => g.id === state.current);
+
+  // ---------- Dinero (todo en centavos) ----------
+  function money(c){
+    const dec = c % 100 !== 0 ? 2 : 0;
+    return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",minimumFractionDigits:dec,maximumFractionDigits:dec}).format(c/100);
+  }
+  function parseAmount(s){
+    s = String(s).replace(/[\s$]/g,"");
+    if (!s) return NaN;
+    if (s.includes(",")) s = s.replace(/\./g,"").replace(",",".");
+    else if ((s.match(/\./g)||[]).length > 1 || /^\d{1,3}\.\d{3}$/.test(s)) s = s.replace(/\./g,"");
+    if (!/^\d+(\.\d{0,2})?$/.test(s)) return NaN;
+    return Math.round(parseFloat(s) * 100);
+  }
+  function shares(e, g){
+    const ids = e.split.filter(id => g.people.some(p => p.id === id));
+    const n = ids.length, out = {};
+    if (!n) return out;
+    const base = Math.floor(e.amount / n); let rem = e.amount - base * n;
+    ids.forEach(id => { out[id] = base + (rem-- > 0 ? 1 : 0); });
+    return out;
+  }
+  function balances(g){
+    const b = {};
+    g.people.forEach(p => b[p.id] = {paid:0, owed:0});
+    g.expenses.forEach(e => {
+      if (b[e.payer]) b[e.payer].paid += e.amount;
+      const s = shares(e, g);
+      for (const id in s) b[id].owed += s[id];
+    });
+    g.people.forEach(p => b[p.id].net = b[p.id].paid - b[p.id].owed);
+    return b;
+  }
+  function settle(g){
+    const b = balances(g);
+    const cred = g.people.filter(p => b[p.id].net > 0).map(p => ({id:p.id, v:b[p.id].net})).sort((a,c)=>c.v-a.v);
+    const debt = g.people.filter(p => b[p.id].net < 0).map(p => ({id:p.id, v:-b[p.id].net})).sort((a,c)=>c.v-a.v);
+    const out = []; let i = 0, j = 0;
+    while (i < debt.length && j < cred.length){
+      const v = Math.min(debt[i].v, cred[j].v);
+      if (v > 0) out.push({from:debt[i].id, to:cred[j].id, v});
+      debt[i].v -= v; cred[j].v -= v;
+      if (debt[i].v === 0) i++;
+      if (cred[j].v === 0) j++;
+    }
+    return out;
+  }
+  const total = g => g.expenses.reduce((s,e) => s + e.amount, 0);
+  const pname = (g,id) => (g.people.find(p => p.id === id) || {name:"(borrado)"}).name;
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  // ---------- Vistas ----------
+  function render(){
+    const g = group();
+    $view.innerHTML = g ? groupView(g) : homeView();
+  }
+
+  function homeView(){
+    const rows = state.groups.map(g => `
+      <button class="item" data-act="open" data-id="${g.id}">
+        <span><span class="t">${esc(g.name)}</span> ${g.example ? '<span class="badge">ejemplo</span>' : ''}<br>
+        <span class="s">${g.people.length} ${g.people.length===1?"persona":"personas"} · ${g.expenses.length} ${g.expenses.length===1?"gasto":"gastos"}</span></span>
+        <span class="amt num">${money(total(g))}</span>
+      </button>`).join("");
+    return `
+      <section style="display:flex;flex-direction:column;gap:12px">
+        <span class="label">Tus vaquitas</span>
+        <div class="list">${rows || '<div class="empty">Todavía no armaste ninguna. Creá la primera acá abajo.</div>'}</div>
+      </section>
+      <form class="card" data-form="newgroup" style="margin-top:20px">
+        <h3 style="font-size:18px">Nueva vaquita</h3>
+        <div class="row">
+          <input class="grow" type="text" id="ng-name" placeholder="Ej: Regalo para Juan, Cena del viernes" maxlength="60" autocomplete="off">
+          <button class="btn" type="submit">Crear</button>
+        </div>
+        <p class="msg">${esc(ui.msg)}</p>
+      </form>`;
+  }
+
+  function groupView(g){
+    const t = total(g), n = g.people.length;
+    const tabs = [["gastos","Gastos"],["personas","Personas"],["saldos","Cómo saldar"]]
+      .map(([k,l]) => `<button class="tab" role="tab" aria-selected="${ui.tab===k}" data-act="tab" data-id="${k}">${l}</button>`).join("");
+    let body = ui.tab === "personas" ? peopleTab(g) : ui.tab === "saldos" ? settleTab(g) : expensesTab(g);
+    return `
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="ghead">
+          <button class="link" data-act="home" style="align-self:flex-start">← Mis vaquitas</button>
+          <h2>${esc(g.name)} ${g.example ? '<span class="badge">ejemplo</span>' : ''}</h2>
+        </div>
+        <div class="stats">
+          <div class="stat"><span class="label">Total</span><b class="num">${money(t)}</b></div>
+          <div class="stat"><span class="label">Personas</span><b class="num">${n}</b></div>
+          <div class="stat"><span class="label">Promedio</span><b class="num">${n ? money(Math.round(t/n)) : "–"}</b></div>
+        </div>
+        <div class="tabs" role="tablist">${tabs}</div>
+        ${body}
+        <div class="row" style="justify-content:center">
+          <button class="del ${ui.armed==='group:'+g.id?'armed':''}" data-act="delgroup" data-id="${g.id}">${ui.armed==='group:'+g.id?'Tocá de nuevo para borrar la vaquita':'Borrar esta vaquita'}</button>
+        </div>
+      </div>`;
+  }
+
+  function peopleTab(g){
+    const chips = g.people.map(p => `<span class="chip">${esc(p.name)}<button aria-label="Quitar a ${esc(p.name)}" data-act="delperson" data-id="${p.id}">✕</button></span>`).join("");
+    return `
+      <form class="card" data-form="person">
+        <span class="label">Quiénes participan</span>
+        <div class="chips">${chips || '<span class="muted">Agregá a las personas que ponen plata.</span>'}</div>
+        <div class="row">
+          <input class="grow" type="text" id="np-name" placeholder="Nombre" maxlength="30" autocomplete="off">
+          <button class="btn" type="submit">Agregar</button>
+        </div>
+        <p class="msg">${esc(ui.msg)}</p>
+      </form>`;
+  }
+
+  function expensesTab(g){
+    if (!g.people.length) return `
+      <div class="card"><p style="margin:0">Primero agregá a las personas del grupo.</p>
+      <button class="btn" data-act="tab" data-id="personas" style="align-self:flex-start">Agregar personas</button></div>`;
+    const opts = g.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+    const picks = g.people.map(p => `<label class="pick"><input type="checkbox" name="split" value="${p.id}" checked>${esc(p.name)}</label>`).join("");
+    const list = g.expenses.slice().reverse().map(e => {
+      const k = Object.keys(shares(e,g)).length;
+      const armed = ui.armed === "exp:" + e.id;
+      return `<div class="exp">
+        <div class="d"><div class="t">${esc(e.desc)}</div>
+          <div class="s">Pagó ${esc(pname(g,e.payer))} · ${k === n ? "entre todos" : "entre " + k}</div></div>
+        <div class="r"><b class="num">${money(e.amount)}</b>
+          <button class="del ${armed?'armed':''}" data-act="delexp" data-id="${e.id}">${armed?'¿Borrar?':'Borrar'}</button></div>
+      </div>`;
+    }).join("");
+    return `
+      <form class="card" data-form="expense">
+        <span class="label">Cargar un gasto</span>
+        <div class="row">
+          <input class="grow" type="text" id="ne-desc" placeholder="¿Qué se compró?" maxlength="60" autocomplete="off">
+          <input style="flex:0 1 150px" inputmode="decimal" id="ne-amount" placeholder="$ Monto" autocomplete="off">
+        </div>
+        <div class="row"><span class="muted" style="font-size:14px">Pagó</span>
+          <select id="ne-payer" class="grow">${opts}</select></div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span class="muted" style="font-size:14px">Se divide entre</span>
+          <div class="chips">${picks}</div>
+        </div>
+        <button class="btn" type="submit" style="align-self:flex-start">Agregar gasto</button>
+        <p class="msg">${esc(ui.msg)}</p>
+      </form>
+      <div class="card">
+        <span class="label">Gastos cargados</span>
+        <div>${list || '<span class="muted">Todavía no hay gastos.</span>'}</div>
+      </div>`;
+  }
+
+  function settleTab(g){
+    if (!g.expenses.length) return `<div class="card"><p style="margin:0" class="muted">Cuando cargues gastos, acá vas a ver quién le paga a quién.</p></div>`;
+    const b = balances(g), tr = settle(g);
+    const max = Math.max(1, ...g.people.map(p => Math.abs(b[p.id].net)));
+    const rows = g.people.map(p => {
+      const x = b[p.id], w = Math.abs(x.net) / max * 50;
+      const cls = x.net > 0 ? "pos" : x.net < 0 ? "neg" : "";
+      const txt = x.net > 0 ? "le deben " + money(x.net) : x.net < 0 ? "debe " + money(-x.net) : "está al día";
+      const bar = x.net >= 0 ? `left:50%;width:${w}%;background:var(--pos)` : `right:50%;width:${w}%;background:var(--neg)`;
+      return `<div class="bal"><span class="n">${esc(p.name)}</span><span class="v num ${cls}">${txt}</span>
+        <div class="bar"><span class="mid"></span><i style="${bar}"></i></div>
+        <span class="s num">Puso ${money(x.paid)} · le corresponde ${money(x.owed)}</span></div>`;
+    }).join("");
+    const trs = tr.length ? tr.map(t => `<div class="tr"><span class="who"><b>${esc(pname(g,t.from))}</b> le pasa a <b>${esc(pname(g,t.to))}</b></span><span class="amt num">${money(t.v)}</span></div>`).join("")
+      : `<div class="ok">¡Están todos al día!</div>`;
+    return `
+      <div class="card">
+        <span class="label">Transferencias para quedar a mano</span>
+        <div style="display:flex;flex-direction:column;gap:8px">${trs}</div>
+        <button class="btn" data-act="share" style="align-self:flex-start">Copiar resumen para WhatsApp</button>
+        ${ui.shareText !== null ? `<div class="share"><p class="muted" style="margin:0 0 6px;font-size:14px">No se pudo copiar solo. Mantené apretado el texto y copialo:</p><textarea id="share-text" readonly>${esc(ui.shareText)}</textarea></div>` : ""}
+      </div>
+      <div class="card">
+        <span class="label">Saldo de cada uno</span>
+        <div>${rows}</div>
+      </div>`;
+  }
+
+  function summary(g){
+    const b = balances(g), tr = settle(g);
+    let s = `La Vaquita: ${g.name}\nTotal: ${money(total(g))} entre ${g.people.length} personas\n\nGastos:\n`;
+    g.expenses.forEach(e => s += `- ${e.desc}: ${money(e.amount)} (pagó ${pname(g,e.payer)})\n`);
+    s += `\nPara quedar a mano:\n`;
+    s += tr.length ? tr.map(t => `- ${pname(g,t.from)} le pasa ${money(t.v)} a ${pname(g,t.to)}`).join("\n") : "- Están todos al día";
+    return s;
+  }
+
+  // ---------- Interacción ----------
+  let toastTimer;
+  function toast(t){ const el = document.getElementById("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 2000); }
+  function arm(key){ ui.armed = key; clearTimeout(ui.armTimer); ui.armTimer = setTimeout(() => { ui.armed = null; render(); }, 3500); }
+  function focusLater(id){ requestAnimationFrame(() => { const el = document.getElementById(id); if (el) el.focus(); }); }
+
+  $view.addEventListener("click", e => {
+    const btn = e.target.closest("[data-act]"); if (!btn) return;
+    const act = btn.dataset.act, id = btn.dataset.id, g = group();
+    ui.msg = "";
+    if (act === "open"){ state.current = id; ui.tab = "gastos"; ui.shareText = null; const ng = group(); if (ng && ng.expenses.length) ui.tab = "saldos"; if (ng && !ng.people.length) ui.tab = "personas"; save(); render(); window.scrollTo(0,0); }
+    else if (act === "home"){ state.current = null; ui.shareText = null; save(); render(); }
+    else if (act === "tab"){ ui.tab = id; ui.shareText = null; render(); }
+    else if (act === "delperson"){
+      if (g.expenses.some(x => x.payer === id || x.split.includes(id))){ ui.msg = `${pname(g,id)} figura en algún gasto. Borrá esos gastos primero.`; render(); return; }
+      g.people = g.people.filter(p => p.id !== id); save(); render();
+    }
+    else if (act === "delexp"){
+      if (ui.armed !== "exp:" + id){ arm("exp:" + id); render(); return; }
+      ui.armed = null; g.expenses = g.expenses.filter(x => x.id !== id); save(); render(); toast("Gasto borrado");
+    }
+    else if (act === "delgroup"){
+      if (ui.armed !== "group:" + id){ arm("group:" + id); render(); return; }
+      ui.armed = null; state.groups = state.groups.filter(x => x.id !== id); state.current = null; save(); render(); toast("Vaquita borrada");
+    }
+    else if (act === "share"){
+      const text = summary(g);
+      const fallback = () => { ui.shareText = text; render(); const ta = document.getElementById("share-text"); if (ta){ ta.focus(); ta.select(); } };
+      try {
+        navigator.clipboard.writeText(text).then(() => { ui.shareText = null; toast("Resumen copiado. Pegalo en WhatsApp."); render(); }, fallback);
+      } catch(err){ fallback(); }
+    }
+  });
+
+  $view.addEventListener("submit", e => {
+    e.preventDefault();
+    const f = e.target.dataset.form, g = group();
+    ui.msg = "";
+    if (f === "newgroup"){
+      const name = document.getElementById("ng-name").value.trim();
+      if (!name){ ui.msg = "Ponele un nombre a la vaquita."; render(); focusLater("ng-name"); return; }
+      const ng = { id:uid(), name, people:[], expenses:[] };
+      state.groups.unshift(ng); state.current = ng.id; ui.tab = "personas"; save(); render(); focusLater("np-name");
+    }
+    else if (f === "person"){
+      const name = document.getElementById("np-name").value.trim();
+      if (!name){ ui.msg = "Escribí un nombre."; render(); focusLater("np-name"); return; }
+      if (g.people.some(p => p.name.toLowerCase() === name.toLowerCase())){ ui.msg = `Ya hay alguien llamado ${name}. Agregale una inicial para diferenciarlos.`; render(); focusLater("np-name"); return; }
+      g.people.push({ id:uid(), name }); save(); render(); focusLater("np-name");
+    }
+    else if (f === "expense"){
+      const desc = document.getElementById("ne-desc").value.trim();
+      const raw = document.getElementById("ne-amount").value;
+      const amount = parseAmount(raw);
+      const payer = document.getElementById("ne-payer").value;
+      const split = [...e.target.querySelectorAll('input[name=split]:checked')].map(x => x.value);
+      const keep = () => { render(); document.getElementById("ne-desc").value = desc; document.getElementById("ne-amount").value = raw; document.getElementById("ne-payer").value = payer;
+        document.querySelectorAll('input[name=split]').forEach(x => x.checked = split.includes(x.value)); };
+      if (!desc){ ui.msg = "Contá qué se compró (por ejemplo: Bebidas)."; keep(); return; }
+      if (!(amount > 0)){ ui.msg = "Revisá el monto. Escribilo así: 12500 o 12.500,50."; keep(); return; }
+      if (!split.length){ ui.msg = "Elegí al menos una persona para dividir el gasto."; keep(); return; }
+      g.expenses.push({ id:uid(), desc, amount, payer, split }); save(); render(); focusLater("ne-desc"); toast("Gasto agregado");
+    }
+  });
+
+  render();
+})();
+</script>
+
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+}
+</script>
+</body>
+</html>
