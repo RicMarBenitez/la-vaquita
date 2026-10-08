@@ -304,6 +304,7 @@ window.addEventListener("error", function(ev){
   }
 
   function expensesTab(g){
+    const n = g.people.length;
     if (!g.people.length) return `
       <div class="card"><p style="margin:0">Primero agregá a las personas del grupo.</p>
       <button class="btn" data-act="tab" data-id="personas" style="align-self:flex-start">Agregar personas</button></div>`;
