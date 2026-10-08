@@ -211,11 +211,26 @@ window.addEventListener("error", function(ev){
   function balances(g){
     const b = {};
     g.people.forEach(p => b[p.id] = {paid:0, owed:0});
+    // Se suma la parte exacta de cada uno y se redondea una sola vez al final,
+    // así los centavos no se acumulan gasto por gasto.
+    // Si todos los montos son en pesos enteros, el reparto también queda en pesos enteros.
+    const unit = g.expenses.every(e => e.amount % 100 === 0) ? 100 : 1;
+    const exact = {}; let shared = 0;
+    g.people.forEach(p => exact[p.id] = 0);
     g.expenses.forEach(e => {
       if (b[e.payer]) b[e.payer].paid += e.amount;
-      const s = shares(e, g);
-      for (const id in s) b[id].owed += s[id];
+      const ids = e.split.filter(id => id in exact);
+      if (!ids.length) return;
+      shared += e.amount;
+      ids.forEach(id => exact[id] += e.amount / ids.length / unit);
     });
+    const rows = g.people.map((p, i) => {
+      const fl = Math.floor(exact[p.id] + 1e-9);
+      return { id:p.id, i, units:fl, frac:exact[p.id] - fl };
+    });
+    let left = Math.round(shared / unit) - rows.reduce((s, r) => s + r.units, 0);
+    rows.slice().sort((a, c) => (c.frac - a.frac) || (a.i - c.i)).forEach(r => { if (left > 0) { r.units++; left--; } });
+    rows.forEach(r => b[r.id].owed = r.units * unit);
     g.people.forEach(p => b[p.id].net = b[p.id].paid - b[p.id].owed);
     return b;
   }
