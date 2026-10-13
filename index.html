@@ -87,6 +87,9 @@ input::placeholder{color:var(--muted)}
 .tabs{display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px}
 .tab{flex:1;border:0;background:none;border-radius:999px;padding:9px 6px;font-weight:600;color:var(--muted);font-size:15px}
 .tab[aria-selected=true]{background:var(--accent);color:var(--accent-ink)}
+.seg{display:inline-flex;gap:4px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:3px;align-self:flex-start}
+.segb{border:0;background:none;border-radius:999px;padding:6px 16px;font-weight:600;color:var(--muted);font-size:14px}
+.segb[aria-pressed=true]{background:var(--accent);color:var(--accent-ink)}
 
 /* People chips */
 .chips{display:flex;flex-wrap:wrap;gap:8px}
@@ -168,7 +171,7 @@ window.addEventListener("error", function(ev){
 (function(){
   const KEY = "la-vaquita-v1";
   const $view = document.getElementById("view");
-  const ui = { tab: "gastos", armed: null, armTimer: null, msg: "", shareText: null };
+  const ui = { kind: "gasto", tab: "gastos", armed: null, armTimer: null, msg: "", shareText: null };
 
   // ---------- Estado ----------
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -209,15 +212,15 @@ window.addEventListener("error", function(ev){
     return out;
   }
   function balances(g){
-    const b = {};
+    const b = {}, exps = resolved(g);
     g.people.forEach(p => b[p.id] = {paid:0, owed:0});
     // Se suma la parte exacta de cada uno y se redondea una sola vez al final,
     // así los centavos no se acumulan gasto por gasto.
     // Si todos los montos son en pesos enteros, el reparto también queda en pesos enteros.
-    const unit = g.expenses.every(e => e.amount % 100 === 0) ? 100 : 1;
+    const unit = exps.every(e => e.amount % 100 === 0) ? 100 : 1;
     const exact = {}; let shared = 0;
     g.people.forEach(p => exact[p.id] = 0);
-    g.expenses.forEach(e => {
+    exps.forEach(e => {
       if (b[e.payer]) b[e.payer].paid += e.amount;
       const ids = e.split.filter(id => id in exact);
       if (!ids.length) return;
@@ -248,7 +251,20 @@ window.addEventListener("error", function(ev){
     }
     return out;
   }
-  const total = g => g.expenses.reduce((s,e) => s + e.amount, 0);
+  // La propina guarda solo el %; el monto se calcula sobre los demás gastos,
+  // así se actualiza sola si se agregan o borran gastos.
+  function tipBase(g){ return g.expenses.reduce((s,e) => s + (e.type === "tip" ? 0 : e.amount), 0); }
+  function tipAmount(g, percent){
+    const base = tipBase(g), raw = base * percent / 100;
+    const whole = g.expenses.every(e => e.type === "tip" || e.amount % 100 === 0);
+    return whole ? Math.round(raw / 100) * 100 : Math.round(raw);
+  }
+  const pct = v => String(v).replace(".", ",");
+  function resolved(g){
+    return g.expenses.map(e => e.type !== "tip" ? e :
+      Object.assign({}, e, { amount: tipAmount(g, e.percent), desc: "Propina " + pct(e.percent) + "%" }));
+  }
+  const total = g => resolved(g).reduce((s,e) => s + e.amount, 0);
   const pname = (g,id) => (g.people.find(p => p.id === id) || {name:"(borrado)"}).name;
   const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -294,7 +310,7 @@ window.addEventListener("error", function(ev){
         <div class="stats">
           <div class="stat"><span class="label">Total</span><b class="num">${money(t)}</b></div>
           <div class="stat"><span class="label">Personas</span><b class="num">${n}</b></div>
-          <div class="stat"><span class="label">Promedio</span><b class="num">${n ? money(Math.round(t/n)) : "–"}</b></div>
+          <div class="stat"><span class="label">Promedio</span><b class="num">${n ? money(Math.round(t/n/100)*100) : "–"}</b></div>
         </div>
         <div class="tabs" role="tablist">${tabs}</div>
         ${body}
@@ -323,9 +339,10 @@ window.addEventListener("error", function(ev){
     if (!g.people.length) return `
       <div class="card"><p style="margin:0">Primero agregá a las personas del grupo.</p>
       <button class="btn" data-act="tab" data-id="personas" style="align-self:flex-start">Agregar personas</button></div>`;
+    const isTip = ui.kind === "tip", base = tipBase(g);
     const opts = g.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
     const picks = g.people.map(p => `<label class="pick"><input type="checkbox" name="split" value="${p.id}" checked>${esc(p.name)}</label>`).join("");
-    const list = g.expenses.slice().reverse().map(e => {
+    const list = resolved(g).slice().reverse().map(e => {
       const k = Object.keys(shares(e,g)).length;
       const armed = ui.armed === "exp:" + e.id;
       return `<div class="exp">
@@ -337,18 +354,28 @@ window.addEventListener("error", function(ev){
     }).join("");
     return `
       <form class="card" data-form="expense">
-        <span class="label">Cargar un gasto</span>
+        <span class="label">Cargar</span>
+        <div class="seg">
+          <button type="button" class="segb" aria-pressed="${!isTip}" data-act="kind" data-id="gasto">Gasto</button>
+          <button type="button" class="segb" aria-pressed="${isTip}" data-act="kind" data-id="tip">Propina</button>
+        </div>
+        ${isTip ? (base ? `
+        <div class="row">
+          <input style="flex:0 1 90px" inputmode="decimal" id="ne-pct" value="10" autocomplete="off" aria-label="Porcentaje de propina">
+          <span class="muted">% sobre ${money(base)}</span>
+          <b class="num" id="tip-prev">= ${money(tipAmount(g, 10))}</b>
+        </div>` : `<p style="margin:0" class="muted">Primero cargá los gastos (la comida, las bebidas) y después agregá la propina sobre el total.</p>`) : `
         <div class="row">
           <input class="grow" type="text" id="ne-desc" placeholder="¿Qué se compró?" maxlength="60" autocomplete="off">
           <input style="flex:0 1 150px" inputmode="decimal" id="ne-amount" placeholder="$ Monto" autocomplete="off">
-        </div>
+        </div>`}
         <div class="row"><span class="muted" style="font-size:14px">Pagó</span>
           <select id="ne-payer" class="grow">${opts}</select></div>
         <div style="display:flex;flex-direction:column;gap:8px">
           <span class="muted" style="font-size:14px">Se divide entre</span>
           <div class="chips">${picks}</div>
         </div>
-        <button class="btn" type="submit" style="align-self:flex-start">Agregar gasto</button>
+        <button class="btn" type="submit" style="align-self:flex-start" ${isTip && !base ? "disabled" : ""}>${isTip ? "Agregar propina" : "Agregar gasto"}</button>
         <p class="msg">${esc(ui.msg)}</p>
       </form>
       <div class="card">
@@ -388,7 +415,7 @@ window.addEventListener("error", function(ev){
   function summary(g){
     const b = balances(g), tr = settle(g);
     let s = `La Vaquita: ${g.name}\nTotal: ${money(total(g))} entre ${g.people.length} personas\n\nGastos:\n`;
-    g.expenses.forEach(e => s += `- ${e.desc}: ${money(e.amount)} (pagó ${pname(g,e.payer)})\n`);
+    resolved(g).forEach(e => s += `- ${e.desc}: ${money(e.amount)} (pagó ${pname(g,e.payer)})\n`);
     s += `\nPara quedar a mano:\n`;
     s += tr.length ? tr.map(t => `- ${pname(g,t.from)} le pasa ${money(t.v)} a ${pname(g,t.to)}`).join("\n") : "- Están todos al día";
     return s;
@@ -406,6 +433,7 @@ window.addEventListener("error", function(ev){
     ui.msg = "";
     if (act === "open"){ state.current = id; ui.tab = "gastos"; ui.shareText = null; const ng = group(); if (ng && ng.expenses.length) ui.tab = "saldos"; if (ng && !ng.people.length) ui.tab = "personas"; save(); render(); window.scrollTo(0,0); }
     else if (act === "home"){ state.current = null; ui.shareText = null; save(); render(); }
+    else if (act === "kind"){ ui.kind = id; render(); focusLater(id === "tip" ? "ne-pct" : "ne-desc"); }
     else if (act === "tab"){ ui.tab = id; ui.shareText = null; render(); }
     else if (act === "delperson"){
       if (g.expenses.some(x => x.payer === id || x.split.includes(id))){ ui.msg = `${pname(g,id)} figura en algún gasto. Borrá esos gastos primero.`; render(); return; }
@@ -428,6 +456,17 @@ window.addEventListener("error", function(ev){
     }
   });
 
+  function parsePct(s){
+    s = String(s).replace(/[\s%]/g, "").replace(",", ".");
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return NaN;
+    return parseFloat(s);
+  }
+  $view.addEventListener("input", e => {
+    if (e.target.id !== "ne-pct") return;
+    const p = parsePct(e.target.value), el = document.getElementById("tip-prev");
+    if (el) el.textContent = p > 0 && p <= 100 ? "= " + money(tipAmount(group(), p)) : "";
+  });
+
   $view.addEventListener("submit", e => {
     e.preventDefault();
     const f = e.target.dataset.form, g = group();
@@ -443,6 +482,17 @@ window.addEventListener("error", function(ev){
       if (!name){ ui.msg = "Escribí un nombre."; render(); focusLater("np-name"); return; }
       if (g.people.some(p => p.name.toLowerCase() === name.toLowerCase())){ ui.msg = `Ya hay alguien llamado ${name}. Agregale una inicial para diferenciarlos.`; render(); focusLater("np-name"); return; }
       g.people.push({ id:uid(), name }); save(); render(); focusLater("np-name");
+    }
+    else if (f === "expense" && ui.kind === "tip"){
+      const raw = document.getElementById("ne-pct").value, percent = parsePct(raw);
+      const payer = document.getElementById("ne-payer").value;
+      const split = [...e.target.querySelectorAll('input[name=split]:checked')].map(x => x.value);
+      const keep = () => { render(); document.getElementById("ne-pct").value = raw; document.getElementById("ne-payer").value = payer;
+        document.querySelectorAll('input[name=split]').forEach(x => x.checked = split.includes(x.value)); };
+      if (!(percent > 0 && percent <= 100)){ ui.msg = "Escribí el porcentaje como número, por ejemplo 10."; keep(); return; }
+      if (!split.length){ ui.msg = "Elegí al menos una persona para dividir la propina."; keep(); return; }
+      g.expenses.push({ id:uid(), type:"tip", percent, desc:"Propina", amount:0, payer, split });
+      ui.kind = "gasto"; save(); render(); toast("Propina agregada");
     }
     else if (f === "expense"){
       const desc = document.getElementById("ne-desc").value.trim();
