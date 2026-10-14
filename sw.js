@@ -1,5 +1,5 @@
-// Guarda la app en el celular para que abra rápido y sin internet.
-const CACHE = "la-vaquita-v1";
+// Guarda la app en el celular para que abra rápido y funcione sin internet.
+const CACHE = "la-vaquita-v2";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
@@ -7,11 +7,14 @@ self.addEventListener("activate", e => {
   self.clients.claim();
 });
 // Primero intenta internet (para tener siempre la última versión); si no hay, usa lo guardado.
+// Solo guarda archivos de la app y de la librería de Firebase, nunca los datos.
 self.addEventListener("fetch", e => {
-  if (e.request.method !== "GET") return;
+  const url = new URL(e.request.url);
+  const cacheable = e.request.method === "GET" && (url.origin === location.origin || url.hostname === "www.gstatic.com");
+  if (!cacheable) return;
   e.respondWith(
     fetch(e.request).then(r => {
-      if (r.ok && new URL(e.request.url).origin === location.origin) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
+      if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
       return r;
     }).catch(() => caches.match(e.request).then(r => r || caches.match("index.html")))
   );

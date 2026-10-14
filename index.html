@@ -132,6 +132,23 @@ input::placeholder{color:var(--muted)}
 .foot{font-size:13px;color:var(--muted);text-align:center}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
+<style>
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.ghead .top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.notice{background:var(--accent-soft);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.notice p{margin:0}
+.offline{font-size:14px;padding:10px 14px;border-radius:12px;background:var(--neg-soft);color:var(--neg);margin:0}
+.pending{font-size:12px;color:var(--muted);font-style:italic}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.photo{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:var(--bg)}
+.tick{background:none;border:0;padding:0;color:var(--accent);font-weight:600;font-size:14px;text-decoration:underline;text-underline-offset:2px}
+.modal{position:fixed;inset:0;z-index:20;background:rgba(5,10,7,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px;padding-top:calc(16px + env(safe-area-inset-top,0px));padding-bottom:calc(16px + env(safe-area-inset-bottom,0px))}
+.modal img{max-width:100%;max-height:78vh;border-radius:8px;background:#fff}
+.modal p{color:#fff;margin:0}
+a{color:var(--accent)}
+.btn[disabled]{opacity:.5;cursor:default}
+</style>
 </head>
 <body>
 <div class="app">
@@ -149,374 +166,634 @@ input::placeholder{color:var(--muted)}
       <p>Dividí los gastos del grupo sin hacer cuentas.</p>
     </div>
   </header>
+  <p class="offline" id="offline" hidden>Estás sin internet. Lo que cargues se guarda en el celular y se sube solo cuando vuelva la conexión.</p>
   <main id="view">
-    <div class="card" id="fallback">
+    <div class="card">
       <h3 style="font-size:18px">Cargando la app…</h3>
-      <p style="margin:0">Si esta pantalla no cambia en unos segundos, probá abrir el link en Chrome o Safari.</p>
-      <p style="margin:0"><b>Qué hacer:</b> tocá los tres puntitos (⋮) arriba a la derecha y elegí <b>"Abrir en Chrome"</b> (o Safari en iPhone). También podés copiar el link y pegarlo en el navegador.</p>
+      <p style="margin:0" id="slow" hidden>Está tardando más de lo normal. Revisá tu conexión a internet. Si abriste el link desde WhatsApp, probá con los tres puntitos (⋮) → <b>"Abrir en Chrome"</b>.</p>
       <p class="msg" id="err"></p>
     </div>
   </main>
-  <p class="foot">Los datos se guardan en este dispositivo.</p>
+  <p class="foot">Cada vaquita se comparte con su link: quien lo tenga puede verla y cargar gastos.</p>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<div class="modal" id="modal" hidden>
+  <p id="modal-msg">Cargando foto…</p>
+  <img id="modal-img" alt="Foto del ticket" hidden>
+  <button class="btn" type="button" id="modal-close">Cerrar</button>
+</div>
 
 <script>
 window.addEventListener("error", function(ev){
   var el = document.getElementById("err");
   if (el) el.textContent = "Detalle del error: " + (ev.message || "desconocido");
 });
-</script>
-<script>
-(function(){
-  const KEY = "la-vaquita-v1";
-  const $view = document.getElementById("view");
-  const ui = { kind: "gasto", tab: "gastos", armed: null, armTimer: null, msg: "", shareText: null };
-
-  // ---------- Estado ----------
-  function uid(){ return Math.random().toString(36).slice(2,9); }
-  function sample(){
-    const p = ["Sofi","Martín","Lucía","Tomás"].map(n => ({id:uid(), name:n}));
-    const all = p.map(x => x.id);
-    return { id:uid(), name:"Asado en lo de Sofi", example:true, people:p, expenses:[
-      {id:uid(), desc:"Carne y achuras", amount:3600000, payer:p[1].id, split:all},
-      {id:uid(), desc:"Bebidas", amount:1450000, payer:p[2].id, split:all},
-      {id:uid(), desc:"Helado", amount:800000, payer:p[0].id, split:[p[0].id,p[2].id,p[3].id]}
-    ]};
-  }
-  let state;
-  try { state = JSON.parse(localStorage.getItem(KEY)); } catch(e) { state = null; }
-  if (!state || !Array.isArray(state.groups)) state = { groups:[sample()], current:null };
-  function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {} }
-  const group = () => state.groups.find(g => g.id === state.current);
-
-  // ---------- Dinero (todo en centavos) ----------
-  function money(c){
-    const dec = c % 100 !== 0 ? 2 : 0;
-    return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",minimumFractionDigits:dec,maximumFractionDigits:dec}).format(c/100);
-  }
-  function parseAmount(s){
-    s = String(s).replace(/[\s$]/g,"");
-    if (!s) return NaN;
-    if (s.includes(",")) s = s.replace(/\./g,"").replace(",",".");
-    else if ((s.match(/\./g)||[]).length > 1 || /^\d{1,3}\.\d{3}$/.test(s)) s = s.replace(/\./g,"");
-    if (!/^\d+(\.\d{0,2})?$/.test(s)) return NaN;
-    return Math.round(parseFloat(s) * 100);
-  }
-  function shares(e, g){
-    const ids = e.split.filter(id => g.people.some(p => p.id === id));
-    const n = ids.length, out = {};
-    if (!n) return out;
-    const base = Math.floor(e.amount / n); let rem = e.amount - base * n;
-    ids.forEach(id => { out[id] = base + (rem-- > 0 ? 1 : 0); });
-    return out;
-  }
-  function balances(g){
-    const b = {}, exps = resolved(g);
-    g.people.forEach(p => b[p.id] = {paid:0, owed:0});
-    // Se suma la parte exacta de cada uno y se redondea una sola vez al final,
-    // así los centavos no se acumulan gasto por gasto.
-    // Si todos los montos son en pesos enteros, el reparto también queda en pesos enteros.
-    const unit = exps.every(e => e.amount % 100 === 0) ? 100 : 1;
-    const exact = {}; let shared = 0;
-    g.people.forEach(p => exact[p.id] = 0);
-    exps.forEach(e => {
-      if (b[e.payer]) b[e.payer].paid += e.amount;
-      const ids = e.split.filter(id => id in exact);
-      if (!ids.length) return;
-      shared += e.amount;
-      ids.forEach(id => exact[id] += e.amount / ids.length / unit);
-    });
-    const rows = g.people.map((p, i) => {
-      const fl = Math.floor(exact[p.id] + 1e-9);
-      return { id:p.id, i, units:fl, frac:exact[p.id] - fl };
-    });
-    let left = Math.round(shared / unit) - rows.reduce((s, r) => s + r.units, 0);
-    rows.slice().sort((a, c) => (c.frac - a.frac) || (a.i - c.i)).forEach(r => { if (left > 0) { r.units++; left--; } });
-    rows.forEach(r => b[r.id].owed = r.units * unit);
-    g.people.forEach(p => b[p.id].net = b[p.id].paid - b[p.id].owed);
-    return b;
-  }
-  function settle(g){
-    const b = balances(g);
-    const cred = g.people.filter(p => b[p.id].net > 0).map(p => ({id:p.id, v:b[p.id].net})).sort((a,c)=>c.v-a.v);
-    const debt = g.people.filter(p => b[p.id].net < 0).map(p => ({id:p.id, v:-b[p.id].net})).sort((a,c)=>c.v-a.v);
-    const out = []; let i = 0, j = 0;
-    while (i < debt.length && j < cred.length){
-      const v = Math.min(debt[i].v, cred[j].v);
-      if (v > 0) out.push({from:debt[i].id, to:cred[j].id, v});
-      debt[i].v -= v; cred[j].v -= v;
-      if (debt[i].v === 0) i++;
-      if (cred[j].v === 0) j++;
-    }
-    return out;
-  }
-  // La propina guarda solo el %; el monto se calcula sobre los demás gastos,
-  // así se actualiza sola si se agregan o borran gastos.
-  function tipBase(g){ return g.expenses.reduce((s,e) => s + (e.type === "tip" ? 0 : e.amount), 0); }
-  function tipAmount(g, percent){
-    const base = tipBase(g), raw = base * percent / 100;
-    const whole = g.expenses.every(e => e.type === "tip" || e.amount % 100 === 0);
-    return whole ? Math.round(raw / 100) * 100 : Math.round(raw);
-  }
-  const pct = v => String(v).replace(".", ",");
-  function resolved(g){
-    return g.expenses.map(e => e.type !== "tip" ? e :
-      Object.assign({}, e, { amount: tipAmount(g, e.percent), desc: "Propina " + pct(e.percent) + "%" }));
-  }
-  const total = g => resolved(g).reduce((s,e) => s + e.amount, 0);
-  const pname = (g,id) => (g.people.find(p => p.id === id) || {name:"(borrado)"}).name;
-  const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-
-  // ---------- Vistas ----------
-  function render(){
-    const g = group();
-    $view.innerHTML = g ? groupView(g) : homeView();
-  }
-
-  function homeView(){
-    const rows = state.groups.map(g => `
-      <button class="item" data-act="open" data-id="${g.id}">
-        <span><span class="t">${esc(g.name)}</span> ${g.example ? '<span class="badge">ejemplo</span>' : ''}<br>
-        <span class="s">${g.people.length} ${g.people.length===1?"persona":"personas"} · ${g.expenses.length} ${g.expenses.length===1?"gasto":"gastos"}</span></span>
-        <span class="amt num">${money(total(g))}</span>
-      </button>`).join("");
-    return `
-      <section style="display:flex;flex-direction:column;gap:12px">
-        <span class="label">Tus vaquitas</span>
-        <div class="list">${rows || '<div class="empty">Todavía no armaste ninguna. Creá la primera acá abajo.</div>'}</div>
-      </section>
-      <form class="card" data-form="newgroup" style="margin-top:20px">
-        <h3 style="font-size:18px">Nueva vaquita</h3>
-        <div class="row">
-          <input class="grow" type="text" id="ng-name" placeholder="Ej: Regalo para Juan, Cena del viernes" maxlength="60" autocomplete="off">
-          <button class="btn" type="submit">Crear</button>
-        </div>
-        <p class="msg">${esc(ui.msg)}</p>
-      </form>`;
-  }
-
-  function groupView(g){
-    const t = total(g), n = g.people.length;
-    const tabs = [["gastos","Gastos"],["personas","Personas"],["saldos","Cómo saldar"]]
-      .map(([k,l]) => `<button class="tab" role="tab" aria-selected="${ui.tab===k}" data-act="tab" data-id="${k}">${l}</button>`).join("");
-    let body = ui.tab === "personas" ? peopleTab(g) : ui.tab === "saldos" ? settleTab(g) : expensesTab(g);
-    return `
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="ghead">
-          <button class="link" data-act="home" style="align-self:flex-start">← Mis vaquitas</button>
-          <h2>${esc(g.name)} ${g.example ? '<span class="badge">ejemplo</span>' : ''}</h2>
-        </div>
-        <div class="stats">
-          <div class="stat"><span class="label">Total</span><b class="num">${money(t)}</b></div>
-          <div class="stat"><span class="label">Personas</span><b class="num">${n}</b></div>
-          <div class="stat"><span class="label">Promedio</span><b class="num">${n ? money(Math.round(t/n/100)*100) : "–"}</b></div>
-        </div>
-        <div class="tabs" role="tablist">${tabs}</div>
-        ${body}
-        <div class="row" style="justify-content:center">
-          <button class="del ${ui.armed==='group:'+g.id?'armed':''}" data-act="delgroup" data-id="${g.id}">${ui.armed==='group:'+g.id?'Tocá de nuevo para borrar la vaquita':'Borrar esta vaquita'}</button>
-        </div>
-      </div>`;
-  }
-
-  function peopleTab(g){
-    const chips = g.people.map(p => `<span class="chip">${esc(p.name)}<button aria-label="Quitar a ${esc(p.name)}" data-act="delperson" data-id="${p.id}">✕</button></span>`).join("");
-    return `
-      <form class="card" data-form="person">
-        <span class="label">Quiénes participan</span>
-        <div class="chips">${chips || '<span class="muted">Agregá a las personas que ponen plata.</span>'}</div>
-        <div class="row">
-          <input class="grow" type="text" id="np-name" placeholder="Nombre" maxlength="30" autocomplete="off">
-          <button class="btn" type="submit">Agregar</button>
-        </div>
-        <p class="msg">${esc(ui.msg)}</p>
-      </form>`;
-  }
-
-  function expensesTab(g){
-    const n = g.people.length;
-    if (!g.people.length) return `
-      <div class="card"><p style="margin:0">Primero agregá a las personas del grupo.</p>
-      <button class="btn" data-act="tab" data-id="personas" style="align-self:flex-start">Agregar personas</button></div>`;
-    const isTip = ui.kind === "tip", base = tipBase(g);
-    const opts = g.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
-    const picks = g.people.map(p => `<label class="pick"><input type="checkbox" name="split" value="${p.id}" checked>${esc(p.name)}</label>`).join("");
-    const list = resolved(g).slice().reverse().map(e => {
-      const k = Object.keys(shares(e,g)).length;
-      const armed = ui.armed === "exp:" + e.id;
-      return `<div class="exp">
-        <div class="d"><div class="t">${esc(e.desc)}</div>
-          <div class="s">Pagó ${esc(pname(g,e.payer))} · ${k === n ? "entre todos" : "entre " + k}</div></div>
-        <div class="r"><b class="num">${money(e.amount)}</b>
-          <button class="del ${armed?'armed':''}" data-act="delexp" data-id="${e.id}">${armed?'¿Borrar?':'Borrar'}</button></div>
-      </div>`;
-    }).join("");
-    return `
-      <form class="card" data-form="expense">
-        <span class="label">Cargar</span>
-        <div class="seg">
-          <button type="button" class="segb" aria-pressed="${!isTip}" data-act="kind" data-id="gasto">Gasto</button>
-          <button type="button" class="segb" aria-pressed="${isTip}" data-act="kind" data-id="tip">Propina</button>
-        </div>
-        ${isTip ? (base ? `
-        <div class="row">
-          <input style="flex:0 1 90px" inputmode="decimal" id="ne-pct" value="10" autocomplete="off" aria-label="Porcentaje de propina">
-          <span class="muted">% sobre ${money(base)}</span>
-          <b class="num" id="tip-prev">= ${money(tipAmount(g, 10))}</b>
-        </div>` : `<p style="margin:0" class="muted">Primero cargá los gastos (la comida, las bebidas) y después agregá la propina sobre el total.</p>`) : `
-        <div class="row">
-          <input class="grow" type="text" id="ne-desc" placeholder="¿Qué se compró?" maxlength="60" autocomplete="off">
-          <input style="flex:0 1 150px" inputmode="decimal" id="ne-amount" placeholder="$ Monto" autocomplete="off">
-        </div>`}
-        <div class="row"><span class="muted" style="font-size:14px">Pagó</span>
-          <select id="ne-payer" class="grow">${opts}</select></div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <span class="muted" style="font-size:14px">Se divide entre</span>
-          <div class="chips">${picks}</div>
-        </div>
-        <button class="btn" type="submit" style="align-self:flex-start" ${isTip && !base ? "disabled" : ""}>${isTip ? "Agregar propina" : "Agregar gasto"}</button>
-        <p class="msg">${esc(ui.msg)}</p>
-      </form>
-      <div class="card">
-        <span class="label">Gastos cargados</span>
-        <div>${list || '<span class="muted">Todavía no hay gastos.</span>'}</div>
-      </div>`;
-  }
-
-  function settleTab(g){
-    if (!g.expenses.length) return `<div class="card"><p style="margin:0" class="muted">Cuando cargues gastos, acá vas a ver quién le paga a quién.</p></div>`;
-    const b = balances(g), tr = settle(g);
-    const max = Math.max(1, ...g.people.map(p => Math.abs(b[p.id].net)));
-    const rows = g.people.map(p => {
-      const x = b[p.id], w = Math.abs(x.net) / max * 50;
-      const cls = x.net > 0 ? "pos" : x.net < 0 ? "neg" : "";
-      const txt = x.net > 0 ? "le deben " + money(x.net) : x.net < 0 ? "debe " + money(-x.net) : "está al día";
-      const bar = x.net >= 0 ? `left:50%;width:${w}%;background:var(--pos)` : `right:50%;width:${w}%;background:var(--neg)`;
-      return `<div class="bal"><span class="n">${esc(p.name)}</span><span class="v num ${cls}">${txt}</span>
-        <div class="bar"><span class="mid"></span><i style="${bar}"></i></div>
-        <span class="s num">Puso ${money(x.paid)} · le corresponde ${money(x.owed)}</span></div>`;
-    }).join("");
-    const trs = tr.length ? tr.map(t => `<div class="tr"><span class="who"><b>${esc(pname(g,t.from))}</b> le pasa a <b>${esc(pname(g,t.to))}</b></span><span class="amt num">${money(t.v)}</span></div>`).join("")
-      : `<div class="ok">¡Están todos al día!</div>`;
-    return `
-      <div class="card">
-        <span class="label">Transferencias para quedar a mano</span>
-        <div style="display:flex;flex-direction:column;gap:8px">${trs}</div>
-        <button class="btn" data-act="share" style="align-self:flex-start">Copiar resumen para WhatsApp</button>
-        ${ui.shareText !== null ? `<div class="share"><p class="muted" style="margin:0 0 6px;font-size:14px">No se pudo copiar solo. Mantené apretado el texto y copialo:</p><textarea id="share-text" readonly>${esc(ui.shareText)}</textarea></div>` : ""}
-      </div>
-      <div class="card">
-        <span class="label">Saldo de cada uno</span>
-        <div>${rows}</div>
-      </div>`;
-  }
-
-  function summary(g){
-    const b = balances(g), tr = settle(g);
-    let s = `La Vaquita: ${g.name}\nTotal: ${money(total(g))} entre ${g.people.length} personas\n\nGastos:\n`;
-    resolved(g).forEach(e => s += `- ${e.desc}: ${money(e.amount)} (pagó ${pname(g,e.payer)})\n`);
-    s += `\nPara quedar a mano:\n`;
-    s += tr.length ? tr.map(t => `- ${pname(g,t.from)} le pasa ${money(t.v)} a ${pname(g,t.to)}`).join("\n") : "- Están todos al día";
-    return s;
-  }
-
-  // ---------- Interacción ----------
-  let toastTimer;
-  function toast(t){ const el = document.getElementById("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 2000); }
-  function arm(key){ ui.armed = key; clearTimeout(ui.armTimer); ui.armTimer = setTimeout(() => { ui.armed = null; render(); }, 3500); }
-  function focusLater(id){ requestAnimationFrame(() => { const el = document.getElementById(id); if (el) el.focus(); }); }
-
-  $view.addEventListener("click", e => {
-    const btn = e.target.closest("[data-act]"); if (!btn) return;
-    const act = btn.dataset.act, id = btn.dataset.id, g = group();
-    ui.msg = "";
-    if (act === "open"){ state.current = id; ui.tab = "gastos"; ui.shareText = null; const ng = group(); if (ng && ng.expenses.length) ui.tab = "saldos"; if (ng && !ng.people.length) ui.tab = "personas"; save(); render(); window.scrollTo(0,0); }
-    else if (act === "home"){ state.current = null; ui.shareText = null; save(); render(); }
-    else if (act === "kind"){ ui.kind = id; render(); focusLater(id === "tip" ? "ne-pct" : "ne-desc"); }
-    else if (act === "tab"){ ui.tab = id; ui.shareText = null; render(); }
-    else if (act === "delperson"){
-      if (g.expenses.some(x => x.payer === id || x.split.includes(id))){ ui.msg = `${pname(g,id)} figura en algún gasto. Borrá esos gastos primero.`; render(); return; }
-      g.people = g.people.filter(p => p.id !== id); save(); render();
-    }
-    else if (act === "delexp"){
-      if (ui.armed !== "exp:" + id){ arm("exp:" + id); render(); return; }
-      ui.armed = null; g.expenses = g.expenses.filter(x => x.id !== id); save(); render(); toast("Gasto borrado");
-    }
-    else if (act === "delgroup"){
-      if (ui.armed !== "group:" + id){ arm("group:" + id); render(); return; }
-      ui.armed = null; state.groups = state.groups.filter(x => x.id !== id); state.current = null; save(); render(); toast("Vaquita borrada");
-    }
-    else if (act === "share"){
-      const text = summary(g);
-      const fallback = () => { ui.shareText = text; render(); const ta = document.getElementById("share-text"); if (ta){ ta.focus(); ta.select(); } };
-      try {
-        navigator.clipboard.writeText(text).then(() => { ui.shareText = null; toast("Resumen copiado. Pegalo en WhatsApp."); render(); }, fallback);
-      } catch(err){ fallback(); }
-    }
-  });
-
-  function parsePct(s){
-    s = String(s).replace(/[\s%]/g, "").replace(",", ".");
-    if (!/^\d+(\.\d{1,2})?$/.test(s)) return NaN;
-    return parseFloat(s);
-  }
-  $view.addEventListener("input", e => {
-    if (e.target.id !== "ne-pct") return;
-    const p = parsePct(e.target.value), el = document.getElementById("tip-prev");
-    if (el) el.textContent = p > 0 && p <= 100 ? "= " + money(tipAmount(group(), p)) : "";
-  });
-
-  $view.addEventListener("submit", e => {
-    e.preventDefault();
-    const f = e.target.dataset.form, g = group();
-    ui.msg = "";
-    if (f === "newgroup"){
-      const name = document.getElementById("ng-name").value.trim();
-      if (!name){ ui.msg = "Ponele un nombre a la vaquita."; render(); focusLater("ng-name"); return; }
-      const ng = { id:uid(), name, people:[], expenses:[] };
-      state.groups.unshift(ng); state.current = ng.id; ui.tab = "personas"; save(); render(); focusLater("np-name");
-    }
-    else if (f === "person"){
-      const name = document.getElementById("np-name").value.trim();
-      if (!name){ ui.msg = "Escribí un nombre."; render(); focusLater("np-name"); return; }
-      if (g.people.some(p => p.name.toLowerCase() === name.toLowerCase())){ ui.msg = `Ya hay alguien llamado ${name}. Agregale una inicial para diferenciarlos.`; render(); focusLater("np-name"); return; }
-      g.people.push({ id:uid(), name }); save(); render(); focusLater("np-name");
-    }
-    else if (f === "expense" && ui.kind === "tip"){
-      const raw = document.getElementById("ne-pct").value, percent = parsePct(raw);
-      const payer = document.getElementById("ne-payer").value;
-      const split = [...e.target.querySelectorAll('input[name=split]:checked')].map(x => x.value);
-      const keep = () => { render(); document.getElementById("ne-pct").value = raw; document.getElementById("ne-payer").value = payer;
-        document.querySelectorAll('input[name=split]').forEach(x => x.checked = split.includes(x.value)); };
-      if (!(percent > 0 && percent <= 100)){ ui.msg = "Escribí el porcentaje como número, por ejemplo 10."; keep(); return; }
-      if (!split.length){ ui.msg = "Elegí al menos una persona para dividir la propina."; keep(); return; }
-      g.expenses.push({ id:uid(), type:"tip", percent, desc:"Propina", amount:0, payer, split });
-      ui.kind = "gasto"; save(); render(); toast("Propina agregada");
-    }
-    else if (f === "expense"){
-      const desc = document.getElementById("ne-desc").value.trim();
-      const raw = document.getElementById("ne-amount").value;
-      const amount = parseAmount(raw);
-      const payer = document.getElementById("ne-payer").value;
-      const split = [...e.target.querySelectorAll('input[name=split]:checked')].map(x => x.value);
-      const keep = () => { render(); document.getElementById("ne-desc").value = desc; document.getElementById("ne-amount").value = raw; document.getElementById("ne-payer").value = payer;
-        document.querySelectorAll('input[name=split]').forEach(x => x.checked = split.includes(x.value)); };
-      if (!desc){ ui.msg = "Contá qué se compró (por ejemplo: Bebidas)."; keep(); return; }
-      if (!(amount > 0)){ ui.msg = "Revisá el monto. Escribilo así: 12500 o 12.500,50."; keep(); return; }
-      if (!split.length){ ui.msg = "Elegí al menos una persona para dividir el gasto."; keep(); return; }
-      g.expenses.push({ id:uid(), desc, amount, payer, split }); save(); render(); focusLater("ne-desc"); toast("Gasto agregado");
-    }
-  });
-
-  render();
-})();
-</script>
-
-<script>
+setTimeout(function(){ if (!window.__vaquita) { var s = document.getElementById("slow"); if (s) s.hidden = false; } }, 8000);
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
 }
+</script>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, collection,
+  setDoc, getDoc, getDocs, deleteDoc, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+// Datos públicos que identifican el proyecto de Firebase (no son una contraseña).
+const firebaseConfig = {
+  apiKey: "AIzaSyAKwlUMQd-Rl675vjEAXRTbZujUrfDkYvw",
+  authDomain: "la-vaquita-e1682.firebaseapp.com",
+  projectId: "la-vaquita-e1682",
+  storageBucket: "la-vaquita-e1682.firebasestorage.app",
+  messagingSenderId: "1091584125315",
+  appId: "1:1091584125315:web:0c03cf3c977117581d6eb6"
+};
+const HOME = "https://la-vaquita-e1682.web.app/";
+const HOME_HOSTS = ["la-vaquita-e1682.web.app", "la-vaquita-e1682.firebaseapp.com", "localhost", "127.0.0.1"];
+
+const fb = initializeApp(firebaseConfig);
+const auth = getAuth(fb);
+let db;
+try { db = initializeFirestore(fb, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch (e) { db = initializeFirestore(fb, {}); }
+
+const $view = document.getElementById("view");
+const ui = { kind:"gasto", tab:"gastos", armed:null, armTimer:null, msg:"", shareText:null, photo:null, photoBusy:false, reset:false };
+let uid = null, authError = null;
+let cur = null;   // vaquita abierta: { id, group, people, expenses, loaded, offlineMissing, unsubs }
+
+// ---------- Mis vaquitas (lista guardada en este celular) ----------
+const MKEY = "la-vaquita-mis-v1";
+let mine;
+try { mine = JSON.parse(localStorage.getItem(MKEY)); } catch(e) { mine = null; }
+if (!mine || !Array.isArray(mine.groups)) mine = { groups:[], payer:{} };
+function saveMine(){ try { localStorage.setItem(MKEY, JSON.stringify(mine)); } catch(e) {} }
+function remember(id, info){
+  let m = mine.groups.find(x => x.id === id);
+  if (!m){ m = { id, name:"Vaquita" }; mine.groups.unshift(m); }
+  Object.assign(m, info); saveMine();
+}
+
+// ---------- Dinero (todo en centavos) ----------
+function money(c){
+  const dec = c % 100 !== 0 ? 2 : 0;
+  return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",minimumFractionDigits:dec,maximumFractionDigits:dec}).format(c/100);
+}
+function parseAmount(s){
+  s = String(s).replace(/[\s$]/g,"");
+  if (!s) return NaN;
+  if (s.includes(",")) s = s.replace(/\./g,"").replace(",",".");
+  else if ((s.match(/\./g)||[]).length > 1 || /^\d{1,3}\.\d{3}$/.test(s)) s = s.replace(/\./g,"");
+  if (!/^\d+(\.\d{0,2})?$/.test(s)) return NaN;
+  return Math.round(parseFloat(s) * 100);
+}
+function parsePct(s){
+  s = String(s).replace(/[\s%]/g, "").replace(",", ".");
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return NaN;
+  return parseFloat(s);
+}
+const pct = v => String(v).replace(".", ",");
+// La propina guarda solo el %; el monto se calcula sobre los demás gastos.
+function tipBase(g){ return g.expenses.reduce((s,e) => s + (e.type === "tip" ? 0 : e.amount), 0); }
+function tipAmount(g, percent){
+  const raw = tipBase(g) * percent / 100;
+  const whole = g.expenses.every(e => e.type === "tip" || e.amount % 100 === 0);
+  return whole ? Math.round(raw / 100) * 100 : Math.round(raw);
+}
+function resolved(g){
+  return g.expenses.map(e => e.type !== "tip" ? e :
+    Object.assign({}, e, { amount: tipAmount(g, e.percent), desc: "Propina " + pct(e.percent) + "%" }));
+}
+const total = g => resolved(g).reduce((s,e) => s + e.amount, 0);
+const inGroup = (g, ids) => ids.filter(id => g.people.some(p => p.id === id));
+function balances(g){
+  // Se suma la parte exacta de cada uno y se redondea una sola vez al final.
+  const b = {}, exps = resolved(g);
+  g.people.forEach(p => b[p.id] = {paid:0, owed:0});
+  const unit = exps.every(e => e.amount % 100 === 0) ? 100 : 1;
+  const exact = {}; let shared = 0;
+  g.people.forEach(p => exact[p.id] = 0);
+  exps.forEach(e => {
+    if (b[e.payer]) b[e.payer].paid += e.amount;
+    const ids = inGroup(g, e.split);
+    if (!ids.length) return;
+    shared += e.amount;
+    ids.forEach(id => exact[id] += e.amount / ids.length / unit);
+  });
+  const rows = g.people.map((p, i) => { const fl = Math.floor(exact[p.id] + 1e-9); return { id:p.id, i, units:fl, frac:exact[p.id] - fl }; });
+  let left = Math.round(shared / unit) - rows.reduce((s, r) => s + r.units, 0);
+  rows.slice().sort((a, c) => (c.frac - a.frac) || (a.i - c.i)).forEach(r => { if (left > 0) { r.units++; left--; } });
+  rows.forEach(r => b[r.id].owed = r.units * unit);
+  g.people.forEach(p => b[p.id].net = b[p.id].paid - b[p.id].owed);
+  return b;
+}
+function settle(g){
+  const b = balances(g);
+  const cred = g.people.filter(p => b[p.id].net > 0).map(p => ({id:p.id, v:b[p.id].net})).sort((a,c)=>c.v-a.v);
+  const debt = g.people.filter(p => b[p.id].net < 0).map(p => ({id:p.id, v:-b[p.id].net})).sort((a,c)=>c.v-a.v);
+  const out = []; let i = 0, j = 0;
+  while (i < debt.length && j < cred.length){
+    const v = Math.min(debt[i].v, cred[j].v);
+    if (v > 0) out.push({from:debt[i].id, to:cred[j].id, v});
+    debt[i].v -= v; cred[j].v -= v;
+    if (debt[i].v === 0) i++;
+    if (cred[j].v === 0) j++;
+  }
+  return out;
+}
+const pname = (g,id) => (g.people.find(p => p.id === id) || {name:"(borrado)"}).name;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const groupLink = id => HOME + "#v=" + id;
+
+// ---------- Firebase: conexión ----------
+function fail(err){
+  console.error(err);
+  toast(navigator.onLine ? "No se pudo guardar. Probá de nuevo en un rato." : "Sin internet: se va a subir cuando vuelva la conexión.");
+}
+function subscribe(){
+  if (!cur || !uid || cur.unsubs.length) return;
+  const id = cur.id;
+  cur.unsubs.push(onSnapshot(doc(db, "groups", id), s => {
+    cur.offlineMissing = !s.exists() && s.metadata.fromCache;
+    cur.group = s.exists() ? s.data() : null;
+    cur.loaded.g = !cur.offlineMissing;
+    if (cur.group) remember(id, { name: cur.group.name });
+    render();
+  }, err => { cur.error = err; render(); }));
+  const sub = (name, key) => cur.unsubs.push(onSnapshot(collection(db, "groups", id, name), s => {
+    cur[key] = s.docs.map(d => Object.assign({ id:d.id, pending:d.metadata.hasPendingWrites }, d.data()))
+      .sort((a, c) => (a.createdAt || 0) - (c.createdAt || 0));
+    cur.loaded[key] = true;
+    if (cur.loaded.people && cur.loaded.expenses)
+      remember(id, { total: total(cur), np: cur.people.length, ne: cur.expenses.length });
+    render();
+  }, err => { cur.error = err; render(); }));
+  sub("people", "people");
+  sub("expenses", "expenses");
+}
+function openGroup(id){
+  if (cur && cur.id === id) return;
+  closeGroup();
+  cur = { id, group:undefined, people:[], expenses:[], loaded:{}, unsubs:[] };
+  ui.tab = "gastos"; ui.kind = "gasto"; ui.shareText = null; ui.photo = null; ui.msg = ""; ui.reset = true;
+  subscribe();
+}
+function closeGroup(){ if (cur) cur.unsubs.forEach(u => u()); cur = null; }
+
+function route(){
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h.startsWith("mis=")){
+    // Llegan las vaquitas de la dirección vieja: se agregan a la lista de este celular.
+    h.slice(4).split(",").filter(x => /^[A-Za-z0-9]{16,40}$/.test(x)).forEach(id => remember(id, {}));
+    history.replaceState(null, "", location.pathname);
+    closeGroup(); render(); refreshNames(); return;
+  }
+  if (h.startsWith("v=")){ openGroup(h.slice(2)); render(); window.scrollTo(0,0); return; }
+  closeGroup(); render();
+}
+function go(hash){ if (location.hash !== hash) location.hash = hash; else route(); }
+async function refreshNames(){
+  if (!uid) return;
+  for (const m of mine.groups.filter(x => x.name === "Vaquita" || x.total === undefined)){
+    try { const s = await getDoc(doc(db, "groups", m.id)); if (s.exists()) remember(m.id, { name: s.data().name }); } catch(e) {}
+  }
+  if (!cur) render();
+}
+
+onAuthStateChanged(auth, u => {
+  if (u){ uid = u.uid; authError = null; subscribe(); refreshNames(); render(); }
+  else signInAnonymously(auth).catch(err => { authError = err; render(); });
+});
+
+// ---------- Vistas ----------
+function captureForm(){
+  const s = { values:{}, checks:{}, focus:null };
+  $view.querySelectorAll("input[id]:not([type=file]):not([type=checkbox]), select[id]").forEach(el => s.values[el.id] = el.value);
+  $view.querySelectorAll("input[name=split]").forEach(el => s.checks[el.value] = el.checked);
+  const a = document.activeElement;
+  if (a && a.id && $view.contains(a)) s.focus = { id:a.id, start:a.selectionStart, end:a.selectionEnd };
+  return s;
+}
+function restoreForm(s){
+  for (const id in s.values){ const el = document.getElementById(id); if (el && s.values[id] !== "") { if (el.tagName !== "SELECT" || [...el.options].some(o => o.value === s.values[id])) el.value = s.values[id]; } }
+  $view.querySelectorAll("input[name=split]").forEach(el => { if (el.value in s.checks) el.checked = s.checks[el.value]; });
+  if (s.focus){ const el = document.getElementById(s.focus.id); if (el){ el.focus(); try { if (s.focus.start != null) el.setSelectionRange(s.focus.start, s.focus.end); } catch(e) {} } }
+}
+function render(){
+  window.__vaquita = true;
+  const snap = ui.reset ? null : captureForm();
+  ui.reset = false;
+  $view.innerHTML = cur ? groupView() : homeView();
+  if (snap) restoreForm(snap);
+  document.getElementById("offline").hidden = navigator.onLine;
+}
+
+function homeView(){
+  const rows = mine.groups.map(m => `
+    <button class="item" data-act="open" data-id="${esc(m.id)}">
+      <span><span class="t">${esc(m.name)}</span><br>
+      <span class="s">${m.np != null ? `${m.np} ${m.np===1?"persona":"personas"} · ${m.ne} ${m.ne===1?"gasto":"gastos"}` : "Tocá para abrir"}</span></span>
+      <span class="amt num">${m.total != null ? money(m.total) : ""}</span>
+    </button>`).join("");
+  return `
+    ${movedNotice()}
+    ${legacyNotice()}
+    ${authError ? `<p class="offline" style="margin-bottom:20px">No se pudo conectar con el servidor (${esc(authError.code || authError.message)}). Revisá tu conexión y volvé a abrir la app.</p>` : ""}
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <span class="label">Tus vaquitas</span>
+      ${rows ? `<div class="list">${rows}</div>` : `
+      <div class="card">
+        <h3 style="font-size:18px">Cómo funciona</h3>
+        <ol class="steps">
+          <li>Creá una vaquita: "Cena del viernes", "Regalo para Juan".</li>
+          <li>Agregá a las personas y compartí el link por WhatsApp.</li>
+          <li>Cada uno carga lo que pagó, con foto del ticket si quiere.</li>
+          <li>La app te dice quién le transfiere a quién para quedar a mano.</li>
+        </ol>
+      </div>`}
+    </section>
+    <form class="card" data-form="newgroup" style="margin-top:20px">
+      <h3 style="font-size:18px">Nueva vaquita</h3>
+      <div class="row">
+        <input class="grow" type="text" id="ng-name" placeholder="Ej: Regalo para Juan, Cena del viernes" maxlength="60" autocomplete="off">
+        <button class="btn" type="submit" ${uid ? "" : "disabled"}>Crear</button>
+      </div>
+      ${uid ? "" : `<p class="muted" style="margin:0;font-size:14px">Conectando…</p>`}
+      <p class="msg">${esc(ui.msg)}</p>
+    </form>
+    <p class="muted" style="font-size:13px;margin:12px 0 0">Si te llegó el link de una vaquita, abrilo y aparece acá.</p>`;
+}
+
+// Vaquitas de la versión vieja (guardadas solo en este celular)
+const OLD_KEY = "la-vaquita-v1";
+function legacyGroups(){
+  try {
+    if (localStorage.getItem(OLD_KEY + "-migrado")) return [];
+    const s = JSON.parse(localStorage.getItem(OLD_KEY));
+    return (s && Array.isArray(s.groups) ? s.groups : []).filter(g => !g.example && (g.people.length || g.expenses.length));
+  } catch(e) { return []; }
+}
+function legacyNotice(){
+  const old = legacyGroups();
+  if (!old.length) return "";
+  return `<div class="notice" style="margin-bottom:20px">
+    <p><b>Tenés ${old.length} ${old.length===1?"vaquita guardada":"vaquitas guardadas"} de la versión anterior</b> (${old.map(g => esc(g.name)).join(", ")}).</p>
+    <p>Pasalas a la versión nueva para poder compartirlas con el grupo.</p>
+    <button class="btn" data-act="migrate" style="align-self:flex-start" ${uid ? "" : "disabled"}>Pasar a la versión nueva</button>
+  </div>`;
+}
+function movedNotice(){
+  if (HOME_HOSTS.includes(location.hostname)) return "";
+  const ids = mine.groups.map(m => m.id).join(",");
+  const url = HOME + (ids ? "#mis=" + ids : "");
+  return `<div class="notice" style="margin-bottom:20px">
+    <p><b>La Vaquita se mudó a una dirección nueva.</b> Usá siempre esta:</p>
+    <p><a href="${esc(url)}">la-vaquita-e1682.web.app</a></p>
+    <p class="muted" style="font-size:14px">${ids ? "Tocando ese link se llevan tus vaquitas. " : ""}Si instalaste la app, desinstalala e instalala de nuevo desde la dirección nueva.</p>
+  </div>`;
+}
+
+function groupView(){
+  if (cur.error) return backBar() + `<div class="card"><p style="margin:0">No se pudo abrir esta vaquita. Revisá tu conexión y volvé a intentar.</p><p class="msg">${esc(cur.error.code || cur.error.message)}</p></div>`;
+  if (cur.offlineMissing) return backBar() + `<div class="card"><p style="margin:0">Para abrir esta vaquita por primera vez necesitás internet.</p></div>`;
+  if (!uid || !cur.loaded.g || !cur.loaded.people || !cur.loaded.expenses) return backBar() + `<div class="card"><p style="margin:0" class="muted">Cargando la vaquita…</p></div>`;
+  if (!cur.group) return backBar() + `<div class="card"><p style="margin:0">Esta vaquita no existe o fue borrada.</p>
+    <button class="btn ghost" data-act="forget" style="align-self:flex-start">Quitar de mi lista</button></div>`;
+  const g = cur, t = total(g), n = g.people.length;
+  const tabs = [["gastos","Gastos"],["personas","Personas"],["saldos","Cómo saldar"]]
+    .map(([k,l]) => `<button class="tab" role="tab" aria-selected="${ui.tab===k}" data-act="tab" data-id="${k}">${l}</button>`).join("");
+  const body = ui.tab === "personas" ? peopleTab(g) : ui.tab === "saldos" ? settleTab(g) : expensesTab(g);
+  const owner = g.group.createdBy === uid;
+  const armKey = "group:" + g.id, armed = ui.armed === armKey;
+  return `
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="ghead">
+        <div class="top">
+          <button class="link" data-act="home">← Mis vaquitas</button>
+          <button class="btn small" data-act="invite">Invitar al grupo</button>
+        </div>
+        <h2>${esc(g.group.name)}</h2>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="label">Total</span><b class="num">${money(t)}</b></div>
+        <div class="stat"><span class="label">Personas</span><b class="num">${n}</b></div>
+        <div class="stat"><span class="label">Promedio</span><b class="num">${n ? money(Math.round(t/n/100)*100) : "–"}</b></div>
+      </div>
+      <div class="tabs" role="tablist">${tabs}</div>
+      ${body}
+      <div class="row" style="justify-content:center">
+        <button class="del ${armed?'armed':''}" data-act="${owner ? "delgroup" : "forget"}">${
+          owner ? (armed ? "Tocá de nuevo: se borra para todos" : "Borrar esta vaquita")
+                : (armed ? "Tocá de nuevo para quitarla" : "Quitar de mi lista")}</button>
+      </div>
+    </div>`;
+}
+const backBar = () => `<div class="ghead" style="margin-bottom:16px"><div class="top"><button class="link" data-act="home">← Mis vaquitas</button></div></div>`;
+
+function peopleTab(g){
+  const chips = g.people.map(p => `<span class="chip">${esc(p.name)}<button aria-label="Quitar a ${esc(p.name)}" data-act="delperson" data-id="${p.id}">✕</button></span>`).join("");
+  return `
+    <form class="card" data-form="person">
+      <span class="label">Quiénes participan</span>
+      <div class="chips">${chips || '<span class="muted">Agregá a las personas que ponen plata.</span>'}</div>
+      <div class="row">
+        <input class="grow" type="text" id="np-name" placeholder="Nombre" maxlength="30" autocomplete="off">
+        <button class="btn" type="submit">Agregar</button>
+      </div>
+      <p class="msg">${esc(ui.msg)}</p>
+    </form>
+    ${g.people.length ? `<div class="notice"><p>¿Ya están todos? Mandales el link para que cada uno cargue lo que pagó.</p>
+      <button class="btn small" data-act="invite" style="align-self:flex-start">Invitar al grupo</button></div>` : ""}`;
+}
+
+function expensesTab(g){
+  if (!g.people.length) return `
+    <div class="card"><p style="margin:0">Primero agregá a las personas del grupo.</p>
+    <button class="btn" data-act="tab" data-id="personas" style="align-self:flex-start">Agregar personas</button></div>`;
+  const n = g.people.length, isTip = ui.kind === "tip", base = tipBase(g);
+  const lastPayer = mine.payer[g.id];
+  const opts = g.people.map(p => `<option value="${p.id}" ${p.id === lastPayer ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  const picks = g.people.map(p => `<label class="pick"><input type="checkbox" name="split" value="${p.id}" checked>${esc(p.name)}</label>`).join("");
+  const list = resolved(g).slice().reverse().map(e => {
+    const k = inGroup(g, e.split).length;
+    const armed = ui.armed === "exp:" + e.id;
+    return `<div class="exp">
+      <div class="d"><div class="t">${esc(e.desc)}</div>
+        <div class="s">Pagó ${esc(pname(g,e.payer))} · ${k === n ? "entre todos" : "entre " + k}</div>
+        ${e.hasPhoto ? `<button class="tick" data-act="photo" data-id="${e.id}">Ver ticket</button>` : ""}
+        ${e.pending ? `<div class="pending">Subiendo…</div>` : ""}</div>
+      <div class="r"><b class="num">${money(e.amount)}</b>
+        <button class="del ${armed?'armed':''}" data-act="delexp" data-id="${e.id}">${armed?'¿Borrar?':'Borrar'}</button></div>
+    </div>`;
+  }).join("");
+  const photo = ui.photoBusy ? `<span class="muted">Preparando la foto…</span>`
+    : ui.photo ? `<img class="thumb" src="${ui.photo}" alt="Foto del ticket elegida"><span class="muted" style="font-size:14px">Foto lista</span>
+                  <button type="button" class="del" data-act="nophoto">Quitar foto</button>`
+    : `<label class="btn ghost small" for="ne-photo">Agregar foto del ticket</label><span class="muted" style="font-size:13px">Opcional</span>`;
+  return `
+    <form class="card" data-form="expense">
+      <span class="label">Cargar</span>
+      <div class="seg">
+        <button type="button" class="segb" aria-pressed="${!isTip}" data-act="kind" data-id="gasto">Gasto</button>
+        <button type="button" class="segb" aria-pressed="${isTip}" data-act="kind" data-id="tip">Propina</button>
+      </div>
+      ${isTip ? (base ? `
+      <div class="row">
+        <input style="flex:0 1 90px" inputmode="decimal" id="ne-pct" value="10" autocomplete="off" aria-label="Porcentaje de propina">
+        <span class="muted">% sobre ${money(base)}</span>
+        <b class="num" id="tip-prev">= ${money(tipAmount(g, 10))}</b>
+      </div>` : `<p style="margin:0" class="muted">Primero cargá los gastos (la comida, las bebidas) y después agregá la propina sobre el total.</p>`) : `
+      <div class="row">
+        <input class="grow" type="text" id="ne-desc" placeholder="¿Qué se compró?" maxlength="60" autocomplete="off">
+        <input style="flex:0 1 150px" inputmode="decimal" id="ne-amount" placeholder="$ Monto" autocomplete="off">
+      </div>`}
+      <div class="row"><span class="muted" style="font-size:14px">Pagó</span>
+        <select id="ne-payer" class="grow">${opts}</select></div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <span class="muted" style="font-size:14px">Se divide entre</span>
+        <div class="chips">${picks}</div>
+      </div>
+      ${isTip ? "" : `<div class="photo">${photo}<input class="vh" type="file" accept="image/*" id="ne-photo"></div>`}
+      <button class="btn" type="submit" style="align-self:flex-start" ${(isTip && !base) || ui.photoBusy ? "disabled" : ""}>${isTip ? "Agregar propina" : "Agregar gasto"}</button>
+      <p class="msg">${esc(ui.msg)}</p>
+    </form>
+    <div class="card">
+      <span class="label">Gastos cargados</span>
+      <div>${list || '<span class="muted">Todavía no hay gastos.</span>'}</div>
+    </div>`;
+}
+
+function settleTab(g){
+  if (!g.expenses.length) return `<div class="card"><p style="margin:0" class="muted">Cuando carguen gastos, acá van a ver quién le paga a quién.</p></div>`;
+  const b = balances(g), tr = settle(g);
+  const max = Math.max(1, ...g.people.map(p => Math.abs(b[p.id].net)));
+  const rows = g.people.map(p => {
+    const x = b[p.id], w = Math.abs(x.net) / max * 50;
+    const cls = x.net > 0 ? "pos" : x.net < 0 ? "neg" : "";
+    const txt = x.net > 0 ? "le deben " + money(x.net) : x.net < 0 ? "debe " + money(-x.net) : "está al día";
+    const bar = x.net >= 0 ? `left:50%;width:${w}%;background:var(--pos)` : `right:50%;width:${w}%;background:var(--neg)`;
+    return `<div class="bal"><span class="n">${esc(p.name)}</span><span class="v num ${cls}">${txt}</span>
+      <div class="bar"><span class="mid"></span><i style="${bar}"></i></div>
+      <span class="s num">Puso ${money(x.paid)} · le corresponde ${money(x.owed)}</span></div>`;
+  }).join("");
+  const trs = tr.length ? tr.map(t => `<div class="tr"><span class="who"><b>${esc(pname(g,t.from))}</b> le pasa a <b>${esc(pname(g,t.to))}</b></span><span class="amt num">${money(t.v)}</span></div>`).join("")
+    : `<div class="ok">¡Están todos al día!</div>`;
+  return `
+    <div class="card">
+      <span class="label">Transferencias para quedar a mano</span>
+      <div style="display:flex;flex-direction:column;gap:8px">${trs}</div>
+      <button class="btn" data-act="share" style="align-self:flex-start">Mandar resumen por WhatsApp</button>
+      ${shareBox()}
+    </div>
+    <div class="card">
+      <span class="label">Saldo de cada uno</span>
+      <div>${rows}</div>
+    </div>`;
+}
+const shareBox = () => ui.shareText !== null ? `<div class="share"><p class="muted" style="margin:0 0 6px;font-size:14px">No se pudo copiar solo. Mantené apretado el texto y copialo:</p><textarea readonly>${esc(ui.shareText)}</textarea></div>` : "";
+
+function summary(g){
+  const tr = settle(g);
+  let s = `La Vaquita: ${g.group.name}\nTotal: ${money(total(g))} entre ${g.people.length} personas\n\nGastos:\n`;
+  resolved(g).forEach(e => s += `- ${e.desc}: ${money(e.amount)} (pagó ${pname(g,e.payer)})\n`);
+  s += `\nPara quedar a mano:\n`;
+  s += tr.length ? tr.map(t => `- ${pname(g,t.from)} le pasa ${money(t.v)} a ${pname(g,t.to)}`).join("\n") : "- Están todos al día";
+  s += `\n\nVer el detalle y los tickets: ${groupLink(g.id)}`;
+  return s;
+}
+
+// ---------- Fotos ----------
+function loadImage(file){
+  return new Promise((ok, bad) => { const img = new Image(); img.onload = () => ok(img); img.onerror = bad; img.src = URL.createObjectURL(file); });
+}
+// Achica la foto para que pese poco (y entre en la base de datos gratis).
+async function compress(file){
+  const img = await loadImage(file);
+  let max = 1400, q = 0.7, out = "";
+  for (let i = 0; i < 8; i++){
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+    out = c.toDataURL("image/jpeg", q);
+    if (out.length < 700000) break;
+    if (q > 0.45) q -= 0.1; else max = Math.round(max * 0.8);
+  }
+  URL.revokeObjectURL(img.src);
+  if (out.length >= 950000) throw new Error("La foto es demasiado grande");
+  return out;
+}
+const $modal = document.getElementById("modal"), $mimg = document.getElementById("modal-img"), $mmsg = document.getElementById("modal-msg");
+async function showPhoto(eid){
+  $modal.hidden = false; $mimg.hidden = true; $mmsg.hidden = false; $mmsg.textContent = "Cargando foto…";
+  try {
+    const s = await getDoc(doc(db, "groups", cur.id, "photos", eid));
+    if (!s.exists()) { $mmsg.textContent = "La foto todavía se está subiendo o no está disponible."; return; }
+    $mimg.src = s.data().data; $mimg.hidden = false; $mmsg.hidden = true;
+  } catch(e) { $mmsg.textContent = "No se pudo cargar la foto. Revisá tu conexión."; }
+}
+document.getElementById("modal-close").addEventListener("click", () => { $modal.hidden = true; $mimg.removeAttribute("src"); });
+
+// ---------- Interacción ----------
+let toastTimer;
+function toast(t){ const el = document.getElementById("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 2600); }
+function arm(key){ ui.armed = key; clearTimeout(ui.armTimer); ui.armTimer = setTimeout(() => { ui.armed = null; render(); }, 3500); }
+function focusLater(id){ requestAnimationFrame(() => { const el = document.getElementById(id); if (el) el.focus(); }); }
+async function shareOut(title, text){
+  if (navigator.share){
+    try { await navigator.share({ title, text }); return; }
+    catch(e) { if (e.name === "AbortError") return; }
+  }
+  try { await navigator.clipboard.writeText(text); ui.shareText = null; toast("Copiado. Pegalo en WhatsApp."); render(); }
+  catch(e) { ui.shareText = text; render(); }
+}
+async function deleteGroup(id){
+  const batch = writeBatch(db);
+  for (const name of ["photos", "expenses", "people"]){
+    const s = await getDocs(collection(db, "groups", id, name));
+    s.forEach(d => batch.delete(d.ref));
+  }
+  await batch.commit();
+  await deleteDoc(doc(db, "groups", id));
+}
+async function migrate(){
+  const old = legacyGroups();
+  const batch = writeBatch(db);
+  const now = Date.now(); let k = 0;
+  old.forEach(og => {
+    const gref = doc(collection(db, "groups"));
+    batch.set(gref, { name: og.name.slice(0, 60), createdBy: uid, createdAt: now });
+    const map = {};
+    og.people.forEach(p => { const r = doc(collection(db, "groups", gref.id, "people")); map[p.id] = r.id; batch.set(r, { name: p.name.slice(0, 30), createdAt: now + k++ }); });
+    og.expenses.forEach(e => {
+      const split = e.split.map(id => map[id]).filter(Boolean);
+      if (!split.length || !map[e.payer]) return;
+      const base = { payer: map[e.payer], split, createdAt: now + k++, hasPhoto: false };
+      batch.set(doc(collection(db, "groups", gref.id, "expenses")), e.type === "tip"
+        ? Object.assign(base, { type:"tip", percent: e.percent })
+        : Object.assign(base, { type:"gasto", desc: e.desc.slice(0, 60), amount: e.amount }));
+    });
+    remember(gref.id, { name: og.name });
+  });
+  try { localStorage.setItem(OLD_KEY + "-migrado", "1"); } catch(e) {}
+  render();
+  batch.commit().then(() => toast("¡Listo! Tus vaquitas ya están en la versión nueva."), fail);
+}
+
+$view.addEventListener("click", e => {
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const act = btn.dataset.act, id = btn.dataset.id, g = cur;
+  if (act !== "delexp" && act !== "delgroup" && act !== "forget") ui.armed = null;
+  ui.msg = "";
+  if (act === "open") go("#v=" + id);
+  else if (act === "home") go("#");
+  else if (act === "tab"){ ui.tab = id; ui.shareText = null; ui.reset = true; render(); }
+  else if (act === "kind"){ ui.kind = id; render(); focusLater(id === "tip" ? "ne-pct" : "ne-desc"); }
+  else if (act === "invite"){
+    shareOut("La Vaquita", `Sumate a la vaquita "${g.group.name}" para cargar lo que pagaste: ${groupLink(g.id)}`);
+  }
+  else if (act === "share") shareOut("La Vaquita", summary(g));
+  else if (act === "photo") showPhoto(id);
+  else if (act === "nophoto"){ ui.photo = null; render(); }
+  else if (act === "migrate") migrate();
+  else if (act === "delperson"){
+    if (g.expenses.some(x => x.payer === id || x.split.includes(id))){ ui.msg = `${pname(g,id)} figura en algún gasto. Borrá esos gastos primero.`; render(); return; }
+    deleteDoc(doc(db, "groups", g.id, "people", id)).catch(fail);
+  }
+  else if (act === "delexp"){
+    if (ui.armed !== "exp:" + id){ arm("exp:" + id); render(); return; }
+    ui.armed = null;
+    const batch = writeBatch(db);
+    batch.delete(doc(db, "groups", g.id, "expenses", id));
+    batch.delete(doc(db, "groups", g.id, "photos", id));
+    batch.commit().catch(fail);
+    toast("Gasto borrado");
+  }
+  else if (act === "delgroup"){
+    if (ui.armed !== "group:" + g.id){ arm("group:" + g.id); render(); return; }
+    ui.armed = null;
+    const gid = g.id;
+    mine.groups = mine.groups.filter(x => x.id !== gid); saveMine();
+    go("#");
+    deleteGroup(gid).then(() => toast("Vaquita borrada"), fail);
+  }
+  else if (act === "forget"){
+    const gid = g.id;
+    if (g.group && ui.armed !== "group:" + gid){ arm("group:" + gid); render(); return; }
+    ui.armed = null;
+    mine.groups = mine.groups.filter(x => x.id !== gid); saveMine();
+    go("#"); toast("Quitada de tu lista");
+  }
+});
+
+$view.addEventListener("input", e => {
+  if (e.target.id !== "ne-pct") return;
+  const p = parsePct(e.target.value), el = document.getElementById("tip-prev");
+  if (el) el.textContent = p > 0 && p <= 100 ? "= " + money(tipAmount(cur, p)) : "";
+});
+$view.addEventListener("change", async e => {
+  if (e.target.id !== "ne-photo" || !e.target.files.length) return;
+  const file = e.target.files[0];
+  ui.photoBusy = true; ui.msg = ""; render();
+  try { ui.photo = await compress(file); }
+  catch(err) { ui.photo = null; ui.msg = "No se pudo usar esa foto. Probá con otra."; }
+  ui.photoBusy = false; render();
+});
+
+$view.addEventListener("submit", e => {
+  e.preventDefault();
+  const f = e.target.dataset.form, g = cur;
+  ui.msg = "";
+  if (f === "newgroup"){
+    const name = document.getElementById("ng-name").value.trim();
+    if (!name){ ui.msg = "Ponele un nombre a la vaquita."; render(); focusLater("ng-name"); return; }
+    if (!uid){ ui.msg = "Todavía conectando. Probá en unos segundos."; render(); return; }
+    const ref = doc(collection(db, "groups"));
+    setDoc(ref, { name, createdBy: uid, createdAt: Date.now() }).catch(fail);
+    remember(ref.id, { name, total:0, np:0, ne:0 });
+    openGroup(ref.id); ui.tab = "personas"; go("#v=" + ref.id); focusLater("np-name");
+  }
+  else if (f === "person"){
+    const name = document.getElementById("np-name").value.trim();
+    if (!name){ ui.msg = "Escribí un nombre."; render(); focusLater("np-name"); return; }
+    if (g.people.some(p => p.name.toLowerCase() === name.toLowerCase())){ ui.msg = `Ya hay alguien llamado ${name}. Agregale una inicial para diferenciarlos.`; render(); focusLater("np-name"); return; }
+    setDoc(doc(collection(db, "groups", g.id, "people")), { name, createdAt: Date.now() }).catch(fail);
+    document.getElementById("np-name").value = ""; focusLater("np-name");
+  }
+  else if (f === "expense"){
+    const payer = document.getElementById("ne-payer").value;
+    const split = [...e.target.querySelectorAll("input[name=split]:checked")].map(x => x.value);
+    let data;
+    if (ui.kind === "tip"){
+      const percent = parsePct(document.getElementById("ne-pct").value);
+      if (!(percent > 0 && percent <= 100)){ ui.msg = "Escribí el porcentaje como número, por ejemplo 10."; render(); return; }
+      data = { type:"tip", percent };
+    } else {
+      const desc = document.getElementById("ne-desc").value.trim();
+      const amount = parseAmount(document.getElementById("ne-amount").value);
+      if (!desc){ ui.msg = "Contá qué se compró (por ejemplo: Bebidas)."; render(); return; }
+      if (!(amount > 0)){ ui.msg = "Revisá el monto. Escribilo así: 12500 o 12.500,50."; render(); return; }
+      data = { type:"gasto", desc, amount };
+    }
+    if (!split.length){ ui.msg = "Elegí al menos una persona para dividir."; render(); return; }
+    const ref = doc(collection(db, "groups", g.id, "expenses"));
+    const batch = writeBatch(db);
+    const photo = ui.kind === "tip" ? null : ui.photo;
+    batch.set(ref, Object.assign(data, { payer, split, createdAt: Date.now(), hasPhoto: !!photo }));
+    if (photo) batch.set(doc(db, "groups", g.id, "photos", ref.id), { data: photo });
+    batch.commit().catch(fail);
+    mine.payer[g.id] = payer; saveMine();
+    const wasTip = ui.kind === "tip";
+    ui.photo = null; ui.kind = "gasto"; ui.reset = true; render();
+    focusLater("ne-desc"); toast(wasTip ? "Propina agregada" : "Gasto agregado");
+  }
+});
+
+window.addEventListener("hashchange", route);
+window.addEventListener("online", render);
+window.addEventListener("offline", render);
+route();
 </script>
 </body>
 </html>
