@@ -345,7 +345,7 @@ function route(){
   const h = decodeURIComponent(location.hash.slice(1));
   if (h.startsWith("mis=")){
     // Llegan las vaquitas de la dirección vieja: se agregan a la lista de este celular.
-    h.slice(4).split(",").filter(x => /^[A-Za-z0-9]{16,40}$/.test(x)).forEach(id => remember(id, {}));
+    h.slice(4).split(",").filter(x => /^[A-Za-z0-9]{16,40}$/.test(x)).forEach(id => { remember(id, {}); toClaim.add(id); });
     history.replaceState(null, "", location.pathname);
     closeGroup(); render(); refreshNames(); return;
   }
@@ -353,8 +353,17 @@ function route(){
   closeGroup(); render();
 }
 function go(hash){ if (location.hash !== hash) location.hash = hash; else route(); }
+const toClaim = new Set();
 async function refreshNames(){
   if (!uid) return;
+  // Vaquitas que llegan de la dirección vieja: este celular pasa a ser el dueño.
+  for (const id of [...toClaim]){
+    try {
+      const s = await getDoc(doc(db, "groups", id));
+      if (s.exists() && s.data().claimable) await setDoc(doc(db, "groups", id), { createdBy: uid, claimable: false }, { merge: true });
+      toClaim.delete(id);
+    } catch(e) {}
+  }
   for (const m of mine.groups.filter(x => x.name === "Vaquita" || x.total === undefined)){
     try { const s = await getDoc(doc(db, "groups", m.id)); if (s.exists()) remember(m.id, { name: s.data().name }); } catch(e) {}
   }
@@ -660,10 +669,10 @@ async function deleteGroup(id){
 async function migrate(){
   const old = legacyGroups();
   const batch = writeBatch(db);
-  const now = Date.now(); let k = 0;
+  const now = Date.now(); let k = 0; const created = [];
   old.forEach(og => {
     const gref = doc(collection(db, "groups"));
-    batch.set(gref, { name: og.name.slice(0, 60), createdBy: uid, createdAt: now });
+    batch.set(gref, { name: og.name.slice(0, 60), createdBy: uid, createdAt: now, claimable: true });
     const map = {};
     og.people.forEach(p => { const r = doc(collection(db, "groups", gref.id, "people")); map[p.id] = r.id; batch.set(r, { name: p.name.slice(0, 30), createdAt: now + k++ }); });
     og.expenses.forEach(e => {
@@ -674,11 +683,16 @@ async function migrate(){
         ? Object.assign(base, { type:"tip", percent: e.percent })
         : Object.assign(base, { type:"gasto", desc: e.desc.slice(0, 60), amount: e.amount }));
     });
-    remember(gref.id, { name: og.name });
+    remember(gref.id, { name: og.name }); created.push(gref.id);
   });
   try { localStorage.setItem(OLD_KEY + "-migrado", "1"); } catch(e) {}
   render();
-  batch.commit().then(() => toast("¡Listo! Tus vaquitas ya están en la versión nueva."), fail);
+  batch.commit().then(() => toast("¡Listo! Tus vaquitas ya están en la versión nueva."), err => {
+    // Si el servidor lo rechaza, se deshace para poder intentarlo de nuevo.
+    try { localStorage.removeItem(OLD_KEY + "-migrado"); } catch(e) {}
+    mine.groups = mine.groups.filter(m => !created.includes(m.id)); saveMine(); render();
+    fail(err);
+  });
 }
 
 $view.addEventListener("click", e => {
